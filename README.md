@@ -1,5 +1,13 @@
 # email-admin
 
+Write a Python script that does the following:
+Reads an Excel file (with editable path) containing two columns: "id" and "contact email".
+The "contact email" field may contain multiple email addresses separated by commas.
+Scans a parent directory (path should be editable) which contains multiple folders named in the format dd-mm-yy-dd-mm-yy (start date to end date).
+For each row in the Excel file, it finds the corresponding PDF file named <id>.pdf inside the folder whose end date (the second dd-mm-yy in the folder name) is the latest.
+If the PDF file is found, the script sends it as an email attachment to all the email addresses in the "contact email" field.
+Allow SMTP configuration (host, port, sender email, sender password) to be easily edited.
+Use only standard libraries and optionally pandas, openpyxl, and smtplib
 
 ```python
 import pandas as pd
