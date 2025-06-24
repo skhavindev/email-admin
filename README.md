@@ -1,131 +1,173 @@
 # email-admin
 
+
 ```python
-import os
 import pandas as pd
+import os
 import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
-import getpass
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
+from email.utils import COMMASPACE
 
-# ===== USER CONFIGURATION =====
-EXCEL_PATH = "path/to/your/excel_file.xlsx"  # Update with your Excel path
-BASE_FOLDER = "path/to/parent/folder"        # Update with parent folder of dated folders
-END_DATE = "31/12/25"                        # Update with end date in dd/mm/yy format
-SENDER_EMAIL = "your_email@example.com"       # Your email address
-# ==============================
+def read_excel_file(file_path: str) -> pd.DataFrame:
+    """Read Excel file with 'id' and 'contact email' columns"""
+    return pd.read_excel(file_path, engine='openpyxl')
 
-def send_email_with_pdf(receiver_email, pdf_path, sender_email, password):
-    """Sends email with PDF attachment"""
+def get_end_date_from_folder(folder_name: str) -> datetime:
+    """Parse folder name to extract end date (second date in format)"""
+    try:
+        parts = folder_name.split('-')
+        end_date_str = '-'.join(parts[3:6])
+        return datetime.strptime(end_date_str, '%d-%m-%y')
+    except (ValueError, IndexError):
+        return None
+
+def find_latest_folder(parent_dir: str) -> str:
+    """Find folder with most recent end date in directory"""
+    latest_date = None
+    latest_folder = None
+    for folder_name in os.listdir(parent_dir):
+        folder_path = os.path.join(parent_dir, folder_name)
+        if os.path.isdir(folder_path):
+            end_date = get_end_date_from_folder(folder_name)
+            if end_date and (not latest_date or end_date > latest_date):
+                latest_date = end_date
+                latest_folder = folder_path
+    return latest_folder
+
+def find_pdf_file(parent_dir: str, file_id: str) -> str:
+    """Locate PDF by ID in latest dated folder"""
+    latest_folder = find_latest_folder(parent_dir)
+    if not latest_folder:
+        return None
+    pdf_path = os.path.join(latest_folder, f"{file_id}.pdf")
+    return pdf_path if os.path.isfile(pdf_path) else None
+
+def send_email_with_attachment(
+    smtp_host: str,
+    smtp_port: int,
+    sender_email: str,
+    sender_password: str,
+    recipient_emails: list,
+    subject: str,
+    body: str,
+    attachment_path: str
+) -> None:
+    """Send email with PDF attachment"""
     msg = MIMEMultipart()
     msg['From'] = sender_email
-    msg['To'] = receiver_email
-    msg['Subject'] = "Your Document"
-    
-    body = "Please find the attached document."
+    msg['To'] = COMMASPACE.join(recipient_emails)
+    msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
     
-    with open(pdf_path, "rb") as f:
-        attach = MIMEApplication(f.read(), _subtype="pdf")
-        attach.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
-        msg.attach(attach)
+    with open(attachment_path, 'rb') as attachment:
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header(
+            'Content-Disposition',
+            f'attachment; filename="{os.path.basename(attachment_path)}"'
+        )
+        msg.attach(part)
     
-    with smtplib.SMTP('smtp.gmail.com', 587) as server:  # For Gmail
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.starttls()
-        server.login(sender_email, password)
+        server.login(sender_email, sender_password)
         server.send_message(msg)
 
-def main():
-    # Convert end date to folder name format
-    end_date_clean = END_DATE.replace("/", "_")
+def process_excel_and_send_emails(
+    excel_path: str,
+    parent_dir: str,
+    smtp_host: str,
+    smtp_port: int,
+    sender_email: str,
+    sender_password: str
+) -> None:
+    """Main processing function"""
+    df = read_excel_file(excel_path)
     
-    # Find target folder
-    target_folder = None
-    for folder_name in os.listdir(BASE_FOLDER):
-        if folder_name.endswith(end_date_clean):
-            target_folder = os.path.join(BASE_FOLDER, folder_name)
-            break
-    
-    if not target_folder:
-        print(f"Error: Folder ending with '{END_DATE}' not found in {BASE_FOLDER}")
-        return
-    
-    print(f"Using folder: {target_folder}")
-    
-    # Read Excel data
-    try:
-        df = pd.read_excel(EXCEL_PATH)
-    except Exception as e:
-        print(f"Error reading Excel file: {e}")
-        return
-    
-    # Email password
-    password = getpass.getpass("Enter your email password: ")
-    
-    # Process records
-    for index, row in df.iterrows():
-        pdf_name = f"{row['id']}.pdf"
-        pdf_path = os.path.join(target_folder, pdf_name)
+    for _, row in df.iterrows():
+        file_id = str(row['id'])
+        emails = [e.strip() for e in str(row['contact email']).split(',') if e.strip()]
         
-        if not os.path.exists(pdf_path):
-            print(f"⚠️ PDF not found for ID {row['id']}: {pdf_name}")
+        if not emails:
+            print(f"Skipping ID {file_id}: No valid emails")
             continue
         
-        emails = [email.strip() for email in str(row['contact email']).split(';')]
+        pdf_path = find_pdf_file(parent_dir, file_id)
+        if not pdf_path:
+            print(f"PDF not found for ID {file_id}")
+            continue
         
-        for email in emails:
-            try:
-                send_email_with_pdf(email, pdf_path, SENDER_EMAIL, password)
-                print(f"✅ Sent {pdf_name} to {email}")
-            except Exception as e:
-                print(f"❌ Failed to send to {email}: {str(e)}")
+        send_email_with_attachment(
+            smtp_host,
+            smtp_port,
+            sender_email,
+            sender_password,
+            emails,
+            f"Document {file_id}",
+            "Please find the attached document.",
+            pdf_path
+        )
+        print(f"Sent email for ID {file_id} to {emails}")
 
-if __name__ == "__main__":
-    main()
+# Example Usage:
+# process_excel_and_send_emails(
+#     excel_path='path/to/contacts.xlsx',
+#     parent_dir='path/to/parent_directory',
+#     smtp_host='smtp.example.com',
+#     smtp_port=587,
+#     sender_email='your_email@example.com',
+#     sender_password='your_password'
+# )
 ```
 
 ### Key Features:
-1. **Easy Configuration**:
-   - Set `EXCEL_PATH`, `BASE_FOLDER`, `END_DATE`, and `SENDER_EMAIL` at the top of the script
-   - Password entered securely at runtime
+1. **Excel Processing**:
+   - Reads Excel files with `id` and `contact email` columns
+   - Handles multiple comma-separated emails per row
 
-2. **Folder Matching**:
-   - Automatically finds folders named `dd_mm_yy-dd_mm_yy`
-   - Uses the END_DATE to locate the correct folder
+2. **PDF Location**:
+   - Automatically finds the folder with latest end date (second date in `dd-mm-yy-dd-mm-yy` format)
+   - Locates PDFs using `id` values
 
-3. **Email Handling**:
-   - Supports multiple emails per contact (separated by semicolons)
-   - PDFs attached with clear filename
-   - Real-time success/failure logging
+3. **Email Functionality**:
+   - Configurable SMTP settings (host, port, credentials)
+   - Sends PDF attachments to all specified emails
+   - TLS encryption for security
 
 4. **Error Handling**:
-   - Missing PDFs reported with ID
-   - Invalid email formats skipped
-   - Excel read errors captured
+   - Skips rows with missing PDFs or invalid emails
+   - Graceful handling of malformed folder names
 
 ### Usage Instructions:
-1. **Prerequisites**:
+1. Install required packages:
    ```bash
    pip install pandas openpyxl
    ```
-2. **Configure**:
-   - Update the 4 configuration variables at the top
-   - Ensure Excel columns are named exactly:
-     - `id` (matches PDF filenames)
-     - `contact email` (semicolon-separated emails)
 
-3. **Run**:
-   ```bash
-   python script_name.py
+2. Configure these parameters in the `process_excel_and_send_emails()` call:
+   - `excel_path`: Path to your Excel file
+   - `parent_dir`: Directory containing dated folders
+   - SMTP credentials for your email provider
+
+3. Run the script:
+   ```python
+   process_excel_and_send_emails(
+       excel_path='contacts.xlsx',
+       parent_dir='reports/',
+       smtp_host='smtp.gmail.com',
+       smtp_port=587,
+       sender_email='your@gmail.com',
+       sender_password='your_app_password'
+   )
    ```
-   - Enter email password when prompted
 
 ### Notes:
-- For Gmail, enable "Less Secure Apps" or use App Password
-- Folder names should use underscores (e.g., `01_01_25_31_12_25`)
-- Dates must be in `dd/mm/yy` format in configuration
-- Excel can be `.xlsx` or `.xls`
-
-To modify paths/date, simply update the configuration variables at the top of the script. The system will automatically locate the correct folder and match PDFs by ID.
+- The script uses pandas for Excel handling and smtplib for email
+- Folder date parsing expects `dd-mm-yy-dd-mm-yy` format
+- For Gmail, enable "Less secure apps" or use app-specific passwords
+- Test with small datasets before full deployment
