@@ -1,6 +1,6 @@
 # email-admin
 
-Write a Python script that does the following:
+A Python script that does the following:
 Reads an Excel file (with editable path) containing two columns: "id" and "contact email".
 The "contact email" field may contain multiple email addresses separated by commas.
 Scans a parent directory (path should be editable) which contains multiple folders named in the format dd-mm-yy-dd-mm-yy (start date to end date).
